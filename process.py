@@ -179,7 +179,7 @@ def comm():
                 # If so, update acceptNum and acceptVal, send 'accepted' back to sender
                 if b >= ballotNum:
                     acceptNum = b
-                    acceptVal = msg[3]
+                    acceptVal = msg[4]
                     response = 'accepted/' + str(acceptNum[0]) + '/' + acceptNum[1] + '/' + str(acceptNum[2]) + '/' + str(acceptVal)
                     threading.Thread(target = message, args = (response, addr)).start()
                     # TESTING: Print sending response
