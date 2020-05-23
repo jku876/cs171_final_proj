@@ -77,7 +77,7 @@ acceptNum = (0, '', 0)
 
 # Proposed block converted into string
 # format - txns||nonce||hash
-acceptVal = ''
+acceptVal = 'NULL'
 
 # Queue that holds all events of the process
 # Possible events: ['transfer', 'balance', 'blockchain', 'fail link', 'fix']
@@ -202,6 +202,8 @@ def comm():
                 print('Received DECIDE from ' + addr_to_PID[addr] + ', adding block to blockchain')
                 # Update local blockchain
                 acceptVal = msg[1]
+                #testing: print acceptVal
+                print(acceptVal)
                 blockchain.append(acceptVal.split('||'))
                 # Update balance
                 update = acceptVal.split('||')[0]
@@ -223,7 +225,7 @@ def comm():
                 accepted = 0
                 ballotNum = (0, PID, 0)
                 acceptNum = (0, '', 0)
-                acceptVal = ''
+                acceptVal = 'NULL'
 
 # Thread for processesing events given by the command line             
 def process():
@@ -281,8 +283,9 @@ def paxos():
     global PID
     global pending
     while True:
-        if len(transfers) == 0 and len(pending) == 0:
-            continue
+        with lock:
+            if len(transfers) == 0 and len(pending) == 0:
+                continue
         time.sleep(5)
         # Add all transactions in transfer to pending
         # Ensures that transfers added by user while paxos is running are not lost
@@ -292,8 +295,9 @@ def paxos():
             transfers = []
         # PHASE I: LEADER ELECTION
         while True:
-            if len(pending) == 0:
-                break
+            with lock:
+                if len(pending) == 0:
+                    break
             with lock:
                 for t in transfers:
                     pending.append(t)
@@ -319,7 +323,7 @@ def paxos():
                     continue
             with lock:
                 # If all acceptVal from promises are empty, set own acceptVal
-                if all(p[-1] == '' for p in promised):
+                if all(p[-1] == 'NULL' for p in promised):
                     # Find appropriate nonce
                     # h = sha256(txns||nonce) must end with a number from 0-4
                     while True:
@@ -362,6 +366,9 @@ def paxos():
             with lock:
                 # Send 'decide' message to all processes
                 decide = 'decide/' + acceptVal + '/' + str(ballotNum[2])
+                #testing: sending decide
+                print('SENDING DECIDE TO ALL PROCESSES')
+                print(acceptVal)
                 for conn in PORTS:
                     if conn != PID:
                         addr = (IP, PORTS[conn])
@@ -390,7 +397,7 @@ def paxos():
                 accepted = 0
                 ballotNum = (0, PID, 0)
                 acceptNum = (0, '', 0)
-                acceptVal = ''
+                acceptVal = 'NULL'
                 break       
 
 # Start threads
