@@ -69,11 +69,11 @@ accepted = 0
 
 # Ballot that the process gives its promise to
 # format - (BallotNum, PID)
-ballotNum = (0, PID)
+ballotNum = (0, PID, 0)
 
 # Ballot number associated with acceptVal
 # format - (BallotNum, PID)
-acceptNum = (0, '')
+acceptNum = (0, '', 0)
 
 # Proposed block converted into string
 # format - txns||nonce||hash
@@ -96,18 +96,18 @@ lock = threading.Lock()
 # Take 2nd param as reboot file
 # Update all variables
 
-# Flush buffer
-def clear_buffer():
-    global s
-    try:
-        s.settimeout(0.01)
-        while s.recvfrom(1024):
-            s.settimeout(None)
-            s.settimeout(0.01)
-            pass
-    except socket.timeout:
-        s.settimeout(None)
-        return
+# # Flush buffer
+# def clear_buffer():
+#     global s
+#     try:
+#         s.settimeout(0.01)
+#         while s.recvfrom(1024):
+#             s.settimeout(None)
+#             s.settimeout(0.01)
+#             pass
+#     except socket.timeout:
+#         s.settimeout(None)
+#         return
 
 # Send a message using UDP
 # msg (str) - message to be sent
@@ -143,29 +143,36 @@ def comm():
             # Pretend message was never received if connection is broken
             if CONN_STATE[addr] == False:
                 continue
-            # prepare|BallotNum|ID 
+            # prepare/BallotNum/ID/Depth
             if type == 'prepare':
-                b = (int(msg[1]),msg[2])
+                # Check if depth is correct
+                if int(msg[3]) != len(blockchain):
+                    continue
+                b = (int(msg[1]),msg[2],int(msg[3]))
                 # TESTING: Print receive 
                 print('Received PREPARE for ballot ' + str(b))
                 # Check if the received ballot is larger than the promised ballot
                 # If so, update ballotNum, send 'promise' back to sender
                 if b >= ballotNum:
                     ballotNum = b
-                    response = ('promise/' + str(ballotNum[0]) + '/' + ballotNum[1] + '/' +
-                               str(acceptNum[0]) + '/' + acceptNum[1] + '/' + str(acceptVal) )
+                    response = ('promise/' + str(ballotNum[0]) + '/' + ballotNum[1] + '/' + str(ballotNum[2]) + '/' +
+                               str(acceptNum[0]) + '/' + acceptNum[1] + '/' + str(acceptNum[2]) + '/' + str(acceptVal) )
                     threading.Thread(target = message, args = (response, addr)).start()
                     # TESTING: Print sending response
                     print('Sending PROMISE for ballot ' + str(b))
-            # promise|BallotNum|ID|AcceptNum|ID|AcceptVal
-            elif type == 'promise' and msg[1] == str(ballotNum[0]) and msg[2] == ballotNum[1]:
+            # promise/BallotNum/ID/Depth/AcceptNum/ID/Depth/AcceptVal
+            elif type == 'promise':
+                if (int(msg[1]), msg[2], int(msg[3])) != ballotNum:
+                    continue
                 # Add promise into list of promises
                 promised.append(msg)
                 # TESTING: Print received promise
                 print('Received PROMISE for ballot ' + str(ballotNum))
-            # accept|BallotNum|ID|Value
+            # accept/BallotNum/ID/Depth/Value
             elif type == 'accept':
-                b = (int(msg[1]),msg[2])
+                if int(msg[3]) != len(blockchain):
+                    continue
+                b = (int(msg[1]),msg[2],int(msg[3]))
                 # TESTING: Print receive 
                 print('Received ACCEPT for ballot ' + str(b))
                 # Check if the received ballot is larger than the promised ballot
@@ -173,22 +180,26 @@ def comm():
                 if b >= ballotNum:
                     acceptNum = b
                     acceptVal = msg[3]
-                    response = 'accepted/' + str(acceptNum[0]) + '/' + acceptNum[1] + '/' + str(acceptVal)
+                    response = 'accepted/' + str(acceptNum[0]) + '/' + acceptNum[1] + '/' + str(acceptNum[2]) + '/' + str(acceptVal)
                     threading.Thread(target = message, args = (response, addr)).start()
                     # TESTING: Print sending response
                     print('Sending ACCEPTED for ballot ' + str(b))
-            # accepted|BallotNum|ID|Value
+            # accepted/BallotNum/ID/Depth/Value
             elif type == 'accepted':
+                if int(msg[3]) != len(blockchain):
+                    continue
                 # Increment number of 'accepted' messages by 1
                 accepted += 1
                 # TESTING: Print received accepted
                 print('Received ACCEPTED for ballot ' + str(ballotNum))
-            # decide|acceptVal
+            # decide/acceptVal/Depth
             elif type == 'decide':
+                if int(msg[2]) != len(blockchain):
+                    continue
+                # clear_buffer()
+                # time.sleep(5)
                 # TESTING: Print received decision
                 print('Received DECIDE from ' + addr_to_PID[addr] + ', adding block to blockchain')
-                clear_buffer()
-                time.sleep(5)
                 # Update local blockchain
                 acceptVal = msg[1]
                 blockchain.append(acceptVal.split('||'))
@@ -210,8 +221,8 @@ def comm():
                 # Reset all paxos variables for the new round of paxos
                 promised = []
                 accepted = 0
-                ballotNum = (0, PID)
-                acceptNum = (0, '')
+                ballotNum = (0, PID, 0)
+                acceptNum = (0, '', 0)
                 acceptVal = ''
 
 # Thread for processesing events given by the command line             
@@ -225,9 +236,15 @@ def process():
         type = event[0]
         with lock:
             if type == 'balance':
-                print(balance)
+                print('BALANCE: ' + str(balance))
             elif type == 'blockchain':
-                print(blockchain)
+                for i in range(len(blockchain)):
+                    block = blockchain[i]
+                    print('------------------------------ BLOCK ' + str(i+1) + ' ------------------------------')
+                    print('txns: ' + block[0])
+                    print('nonce: ' + block[1])
+                    print('hash: ' + block[2])
+                print('------------------------- END OF BLOCKCHAIN -------------------------')
             # fail link, DEST
             elif type == 'fail link':
                 CONN_STATE[(IP, PORTS[e[1]])] = False
@@ -273,17 +290,21 @@ def paxos():
             for t in transfers:
                 pending.append(t)
             transfers = []
-        # Flag to determine if own value is being promoted
-        promote = True
         # PHASE I: LEADER ELECTION
         while True:
+            if len(pending) == 0:
+                break
+            with lock:
+                for t in transfers:
+                    pending.append(t)
+                transfers = []
             time.sleep(random.randint(0,5))
             with lock:
                 promised = []
                 accepted = 0
-                ballotNum = (ballotNum[0] + 1, PID)
-                # prepare|BallotNum|ID 
-                prepare = 'prepare/' + str(ballotNum[0]) + '/' + ballotNum[1]
+                ballotNum = (ballotNum[0] + 1, PID, len(blockchain))
+                # prepare/BallotNum/ID/Depth 
+                prepare = 'prepare/' + str(ballotNum[0]) + '/' + ballotNum[1] + '/' + str(ballotNum[2])
                 # send prepare messages to all processes
                 for conn in PORTS:
                     if conn != PID:
@@ -311,70 +332,66 @@ def paxos():
                             break
                     # Edge case for first block
                     if len(blockchain) == 0:
-                        acceptVal = str(pending) + '||' + nonce + '|| '
+                        acceptVal = str(pending) + '||' + nonce + '||' + sha256(''.encode('utf-8')).hexdigest()
                     # General case for all other blocks
                     else:
                         # Hash of the previous block
                         prevHash = sha256(str(blockchain[-1]).encode('utf-8')).hexdigest()
                         acceptVal = str(pending) + '||' + nonce + '||' + prevHash
                 # If acceptVal are not all empty, promote the acceptVal with the highest ballotNum
-                # Set promote flag to false
                 else:
                     promised.sort(reverse = True)
                     acceptVal = promised[0][-1]
-                    promote = False
-                break
-        # PHASE II: CONSENSUS
-        with lock:
-            # accept|BallotNum|ID|Value
-            accept = 'accept/' + str(ballotNum[0]) + '/' + ballotNum[1] + '/' + acceptVal
-            # Send 'accept' messages to all processes
-            for conn in PORTS:
-                if conn != PID:
-                    addr = (IP, PORTS[conn])
-                    threading.Thread(target = message, args = (accept, addr)).start()
-        # Wait for 'promise' reponses
-        # Acts as a psuedo timeout
-        time.sleep(4.5)
-        with lock:
-            # If the process does not receive the majority of 'accepted', restart from PHASE I
-            if accepted < 2:
-                continue
-        # PHASE III: Decide
-        with lock:
-            # Send 'decide' message to all processes
-            decide = 'decide/' + acceptVal
-            for conn in PORTS:
-                if conn != PID:
-                    addr = (IP, PORTS[conn])
-                    threading.Thread(target = message, args = (decide, addr)).start()
-            # Remove all successful transactions from pending
-            if promote:
-                pending = []
-            # Add block to blockchain
-            blockchain.append(acceptVal.split('||'))
-            # Update balance
-            update = acceptVal.split('||')[0]
-            update = update[1:-1]
-            for char in ')(\'':
-                update = update.replace(char,'')
-            update = update.split(', ')
-            txns = []
-            for i in range(len(update)//3):
-                txns.append((update[3*i], update[3*i+1], update[3*i+2]))
-            for t in txns:
-                if t[0] == PID:
-                    balance -= int(t[2])
-                if t[1] == PID:
-                    balance += int(t[2])
-            clear_buffer()
-            time.sleep(7)
-            # Reset all paxos variables for the new round of paxos
-            promised = []
-            accepted = 0
-            ballotNum = (0, PID)
-            acceptNum = (0, '')
-            acceptVal = ''            
+            # PHASE II: CONSENSUS
+            with lock:
+                # accept/BallotNum/ID/Depth/Value
+                accept = 'accept/' + str(ballotNum[0]) + '/' + ballotNum[1] + '/' + str(ballotNum[2]) + '/' + acceptVal
+                # Send 'accept' messages to all processes
+                for conn in PORTS:
+                    if conn != PID:
+                        addr = (IP, PORTS[conn])
+                        threading.Thread(target = message, args = (accept, addr)).start()
+            # Wait for 'promise' reponses
+            # Acts as a psuedo timeout
+            time.sleep(4.5)
+            with lock:
+                # If the process does not receive the majority of 'accepted', restart from PHASE I
+                if accepted < 2:
+                    continue
+            # PHASE III: Decide
+            with lock:
+                # Send 'decide' message to all processes
+                decide = 'decide/' + acceptVal + '/' + str(ballotNum[2])
+                for conn in PORTS:
+                    if conn != PID:
+                        addr = (IP, PORTS[conn])
+                        threading.Thread(target = message, args = (decide, addr)).start()
+                # Add block to blockchain
+                blockchain.append(acceptVal.split('||'))
+                # Update balance
+                update = acceptVal.split('||')[0]
+                update = update[1:-1]
+                for char in ')(\'':
+                    update = update.replace(char,'')
+                update = update.split(', ')
+                txns = []
+                for i in range(len(update)//3):
+                    txns.append((update[3*i], update[3*i+1], update[3*i+2]))
+                for t in txns:
+                    if t[0] == PID:
+                        balance -= int(t[2])
+                        pending = []
+                    if t[1] == PID:
+                        balance += int(t[2])
+                # clear_buffer()
+                # time.sleep(7)
+                # Reset all paxos variables for the new round of paxos
+                promised = []
+                accepted = 0
+                ballotNum = (0, PID, 0)
+                acceptNum = (0, '', 0)
+                acceptVal = ''
+                break       
 
 # Start threads
 threading.Thread(target = process).start()
