@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from hashlib import sha256
+import os
 
 
 
@@ -91,27 +92,6 @@ s.bind((IP, PORTS[PID]))
 # Lock to ensure mutual exclusion
 lock = threading.Lock()
 
-### TODO: READ SNAPSHOT IF NECESSARY ###
-# Initial started up pass 'default' as the file
-# Take 2nd param as reboot file
-# Update all variables
-
-# # Flush buffer
-# def clear_buffer():
-#     global s
-#     try:
-#         s.settimeout(0.01)
-#         while s.recvfrom(1024):
-#             s.settimeout(None)
-#             s.settimeout(0.01)
-#             pass
-#     except socket.timeout:
-#         s.settimeout(None)
-#         return
-
-# Send a message using UDP
-# msg (str) - message to be sent
-# addr (str, int) - tuple (IP, port) for UDP destination
 def message(msg,addr):
     # Fixed delay for each message
     time.sleep(2)
@@ -145,8 +125,17 @@ def comm():
                 continue
             # prepare/BallotNum/ID/Depth
             if type == 'prepare':
-                # Check if depth is correct
-                if int(msg[3]) != len(blockchain):
+                # Send updated blockchain back to sender if sender's depth is shorter
+                if int(msg[3]) < len(blockchain):
+                    for i in range(int(msg[3]), len(blockchain)):
+                        block = blockchain[i]
+                        update = block[0] + '||' + block[1] + '||' + block[2]
+                        update = 'update/' + update + '/' + str(i)
+                        threading.Thread(target = message, args = (update, addr)).start()
+                    continue
+                # Ask sender for updated blockchain if own blockchain is shorter
+                elif int(msg[3]) > len(blockchain):
+                    threading.Thread(target = message, args = ('request/' + str(len(blockchain)), addr)).start()
                     continue
                 b = (int(msg[1]),msg[2],int(msg[3]))
                 # TESTING: Print receive 
@@ -162,6 +151,7 @@ def comm():
                     print('Sending PROMISE for ballot ' + str(b))
             # promise/BallotNum/ID/Depth/AcceptNum/ID/Depth/AcceptVal
             elif type == 'promise':
+                # Only accept promises if the ballotNum matches
                 if (int(msg[1]), msg[2], int(msg[3])) != ballotNum:
                     continue
                 # Add promise into list of promises
@@ -170,7 +160,12 @@ def comm():
                 print('Received PROMISE for ballot ' + str(ballotNum))
             # accept/BallotNum/ID/Depth/Value
             elif type == 'accept':
-                if int(msg[3]) != len(blockchain):
+                # Ignore messages for shorter blockchains
+                if int(msg[3]) < len(blockchain):
+                    continue
+                # Ask sender for updated blockchain if own blockchain is shorter
+                elif int(msg[3]) > len(blockchain):
+                    threading.Thread(target = message, args = ('request/' + str(len(blockchain)), addr)).start()
                     continue
                 b = (int(msg[1]),msg[2],int(msg[3]))
                 # TESTING: Print receive 
@@ -186,6 +181,7 @@ def comm():
                     print('Sending ACCEPTED for ballot ' + str(b))
             # accepted/BallotNum/ID/Depth/Value
             elif type == 'accepted':
+                # Ignore messages for shorter blockchains
                 if int(msg[3]) != len(blockchain):
                     continue
                 # Increment number of 'accepted' messages by 1
@@ -194,15 +190,18 @@ def comm():
                 print('Received ACCEPTED for ballot ' + str(ballotNum))
             # decide/acceptVal/Depth
             elif type == 'decide':
-                if int(msg[2]) != len(blockchain):
+                # Ignore messages for shorter blockchains
+                if int(msg[2]) < len(blockchain):
                     continue
-                # clear_buffer()
-                # time.sleep(5)
+                # Ask sender for updated blockchain if own blockchain is shorter
+                elif int(msg[2]) > len(blockchain):
+                    threading.Thread(target = message, args = ('request/' + str(len(blockchain)), addr)).start()
+                    continue
                 # TESTING: Print received decision
                 print('Received DECIDE from ' + addr_to_PID[addr] + ', adding block to blockchain')
                 # Update local blockchain
                 acceptVal = msg[1]
-                #testing: print acceptVal
+                # TESTING: print acceptVal
                 print(acceptVal)
                 blockchain.append(acceptVal.split('||'))
                 # Update balance
@@ -226,6 +225,40 @@ def comm():
                 ballotNum = (0, PID, 0)
                 acceptNum = (0, '', 0)
                 acceptVal = 'NULL'
+            # request/depth
+            elif type == 'request':
+                # Check if own blockchain is long enough to respond to the request
+                if int(msg[1]) >= len(blockchain):
+                    continue
+                # Send all blocks that the sender is missing
+                for i in range(int(msg[1]), len(blockchain)):
+                    block = blockchain[i]
+                    update = block[0] + '||' + block[1] + '||' + block[2]
+                    update = 'update/' + update + '/' + str(i)
+                    time.sleep(0.01)
+                    threading.Thread(target = message, args = (update, addr)).start()
+            # update/acceptVal/depth
+            elif type == 'update':
+                # Check if given block is the next block needed
+                if int(msg[2]) != len(blockchain):
+                    continue
+                blockchain.append(msg[1].split('||'))
+                # Update balance
+                update = msg[1].split('||')[0]
+                update = update[1:-1]
+                for char in ')(\'':
+                    update = update.replace(char,'')
+                update = update.split(', ')
+                txns = []
+                for i in range(len(update)//3):
+                    txns.append((update[3*i], update[3*i+1], update[3*i+2]))
+                for t in txns:
+                    if t[0] == PID:
+                        balance -= int(t[2])
+                        pending = []
+                    if t[1] == PID:
+                        balance += int(t[2])
+
 
 # Thread for processesing events given by the command line             
 def process():
@@ -251,13 +284,15 @@ def process():
             elif type == 'fail link':
                 CONN_STATE[(IP, PORTS[e[1]])] = False
             # fail link, DEST
-            elif type == 'fix':
+            elif type == 'fix link':
                 CONN_STATE[(IP, PORTS[e[1]])] = True
             # transfer, receiver, amount
             elif type == 'transfer':
                 temp = balance
                 for t in transfers:
                     temp -= int(t[2])
+                for p in pending:
+                    temp -= int(p[2])
                 # Make sure there is sufficient money for the transfer
                 if temp <= int(e[2]):
                     print('Insufficient balance for: ' + str(e))
@@ -266,8 +301,22 @@ def process():
                 # Append transfer to list of transfers
                 transfers.append((PID,e[1],e[2]))
             elif type == 'fail process':
-                ### TODO: SNAPSHOT ###
-                continue
+                f = open(PID + '.txt', 'w')
+                # pending, transfer
+                for i in pending:
+                    f.write(str(i) + '\n')
+                for j in transfers:
+                    f.write(str(j) + '\n')
+                f.close()
+                os._exit(0)
+            # print all transactions in queue
+            elif type == 'queue':
+                print('Pending Transactions:')
+                for i in pending:
+                    print(i)
+                for j in transfers:
+                    print(j)
+
 
 # Thread to run paxos
 def paxos():
@@ -283,25 +332,25 @@ def paxos():
     global PID
     global pending
     while True:
+        # Do nothing if no transactions
         with lock:
             if len(transfers) == 0 and len(pending) == 0:
                 continue
+        # Sleep to allow for multiple transactions in a block
         time.sleep(5)
-        # Add all transactions in transfer to pending
-        # Ensures that transfers added by user while paxos is running are not lost
-        with lock:
-            for t in transfers:
-                pending.append(t)
-            transfers = []
         # PHASE I: LEADER ELECTION
         while True:
-            with lock:
-                if len(pending) == 0:
-                    break
+            # Add all transactions in transfer to pending
+            # Ensures that transfers added by user while paxos is running are not lost
             with lock:
                 for t in transfers:
                     pending.append(t)
                 transfers = []
+            # If pending is cleared, break out to the outer loop and wait for transactions
+            with lock:
+                if len(pending) == 0:
+                    break
+            # Random wait before start of paxos
             time.sleep(random.randint(0,5))
             with lock:
                 promised = []
@@ -400,6 +449,23 @@ def paxos():
                 acceptVal = 'NULL'
                 break       
 
+# update to saved version
+with lock:
+    if len(sys.argv) == 3:
+        file_name = sys.argv[2]
+        save_file = open(file_name, 'r')
+        for line in save_file:
+            line = line[1:-1]
+            line = line.replace("\'",'')
+            line = line.split(', ')
+            pending.append((line[0], line[1], line[2]))
+        # Ask for blockchain from other processes
+        for conn in PORTS:
+            if conn != PID:
+                addr = (IP, PORTS[conn])
+                threading.Thread(target = message, args = ('request/0', addr)).start()
+                time.sleep(0.1)
+
 # Start threads
 threading.Thread(target = process).start()
 threading.Thread(target = comm).start()
@@ -410,7 +476,8 @@ while True:
     event = input()
     event = event.split(', ')
     # Place event in queue if valid
-    if event[0] in ['transfer', 'balance', 'blockchain', 'fail link', 'fix']:
-        events.put(event)
-    else:
-        print('Invalid Command')
+    with lock:
+        if event[0] in ['transfer', 'balance', 'blockchain', 'fail link', 'fix link', 'fail process', 'queue']:
+            events.put(event)
+        else:
+            print('Invalid Command')
