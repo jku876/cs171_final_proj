@@ -334,10 +334,10 @@ def paxos():
     while True:
         # Do nothing if no transactions
         with lock:
-            if len(transfers) == 0 and len(pending) == 0:
+            if len(transfers) == 0 and len(pending) == 0 and acceptVal == 'NULL':
                 continue
         # Sleep to allow for multiple transactions in a block
-        time.sleep(5)
+        time.sleep(7)
         # PHASE I: LEADER ELECTION
         while True:
             # Add all transactions in transfer to pending
@@ -348,7 +348,7 @@ def paxos():
                 transfers = []
             # If pending is cleared, break out to the outer loop and wait for transactions
             with lock:
-                if len(pending) == 0:
+                if len(pending) == 0 and acceptVal == 'NULL':
                     break
             # Random wait before start of paxos
             time.sleep(random.randint(0,5))
@@ -373,24 +373,21 @@ def paxos():
             with lock:
                 # If all acceptVal from promises are empty, set own acceptVal
                 if all(p[-1] == 'NULL' for p in promised):
+                    prevHash = ''
+                    if len(blockchain) != 0:
+                        prevHash = blockchain[-1][0] + '||' + blockchain[-1][1] + '||' + blockchain[-1][2]
+                    prevHash = sha256(prevHash.encode('utf-8')).hexdigest()
                     # Find appropriate nonce
-                    # h = sha256(txns||nonce) must end with a number from 0-4
+                    # h = sha256(txns||nonce||hash) must end with a number from 0-4
                     while True:
                         nonce = str(random.randint(0, 100))
-                        h = sha256((str(pending) + "||" + nonce).encode('utf-8')).hexdigest()
+                        acceptVal = str(pending) + "||" + nonce + "||" + prevHash
+                        h = sha256(acceptVal.encode('utf-8')).hexdigest()
                         if '0' <= h[-1] <= '4':
                             # TESTING: Print nonce and hash value
                             print('Nonce: ' + nonce)
                             print('Hash value: ' + h)
                             break
-                    # Edge case for first block
-                    if len(blockchain) == 0:
-                        acceptVal = str(pending) + '||' + nonce + '||' + sha256(''.encode('utf-8')).hexdigest()
-                    # General case for all other blocks
-                    else:
-                        # Hash of the previous block
-                        prevHash = sha256(str(blockchain[-1]).encode('utf-8')).hexdigest()
-                        acceptVal = str(pending) + '||' + nonce + '||' + prevHash
                 # If acceptVal are not all empty, promote the acceptVal with the highest ballotNum
                 else:
                     promised.sort(reverse = True)
