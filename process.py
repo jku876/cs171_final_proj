@@ -294,7 +294,7 @@ def process():
                 for p in pending:
                     temp -= int(p[2])
                 # Make sure there is sufficient money for the transfer
-                if temp <= int(e[2]):
+                if temp < int(e[2]):
                     print('Insufficient balance for: ' + str(e))
                     print('Transfer FAILED')
                     continue
@@ -358,6 +358,8 @@ def paxos():
                 ballotNum = (ballotNum[0] + 1, PID, len(blockchain))
                 # prepare/BallotNum/ID/Depth 
                 prepare = 'prepare/' + str(ballotNum[0]) + '/' + ballotNum[1] + '/' + str(ballotNum[2])
+                # TESTING: Print sending response
+                print('Sending PREPARE for ballot ' + str(ballotNum))
                 # send prepare messages to all processes
                 for conn in PORTS:
                     if conn != PID:
@@ -397,6 +399,8 @@ def paxos():
                 # accept/BallotNum/ID/Depth/Value
                 accept = 'accept/' + str(ballotNum[0]) + '/' + ballotNum[1] + '/' + str(ballotNum[2]) + '/' + acceptVal
                 # Send 'accept' messages to all processes
+                # TESTING: Print sending response
+                print('Sending ACCEPT for ballot ' + str(ballotNum))
                 for conn in PORTS:
                     if conn != PID:
                         addr = (IP, PORTS[conn])
