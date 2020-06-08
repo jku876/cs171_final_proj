@@ -353,6 +353,8 @@ def paxos():
             # Random wait before start of paxos
             time.sleep(random.randint(0,5))
             with lock:
+                if len(pending) == 0 and acceptVal == 'NULL':
+                    break
                 promised = []
                 accepted = 0
                 ballotNum = (ballotNum[0] + 1, PID, len(blockchain))
